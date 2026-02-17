@@ -5,128 +5,98 @@ from core.config import RAW_PDFS_DIR
 
 class PDFProcessor:
     def __init__(self):
+        """Initializes with Robust Spatial Indexing."""
         pass
 
     def process_pdf_stream(self, file_path, status_callback=None):
         doc = fitz.open(file_path)
-        filename = os.path.basename(file_path)
-        
-        image_folder = RAW_PDFS_DIR / "extracted_images"
-        os.makedirs(image_folder, exist_ok=True)
-        
         batch = []
         BATCH_SIZE = 5
 
         for page_num, page in enumerate(doc):
-            # 1. Get Text Blocks with Coordinates
-            # format: (x0, y0, x1, y1, "text", block_no, block_type)
             text_blocks = page.get_text("blocks")
-            
-            # 2. Get Images with Coordinates
             image_list = page.get_images(full=True)
-            page_images = []
+            page_assets = []
             
             for i, img_info in enumerate(image_list):
                 try:
                     xref = img_info[0]
-                    # Get image position on page (rect)
-                    # We have to search for the image usage on the page to get rect
                     rects = page.get_image_rects(xref)
                     if not rects: continue
-                    img_rect = rects[0]  # Use first occurrence
+                    img_rect = rects[0]
                     
-                    base_image = doc.extract_image(xref)
-                    image_bytes = base_image["image"]
-                    ext = base_image["ext"]
+                    if len(doc.extract_image(xref)["image"]) < 10240: continue 
                     
-                    if len(image_bytes) < 5120: continue # Skip icons
+                    # --- ROBUST CAPTION LINKING ---
+                    best_caption = "None"
+                    min_v_dist = 1000
                     
-                    img_name = f"{filename}_p{page_num}_img{i}.{ext}"
-                    saved_path = image_folder / img_name
-                    
-                    with open(saved_path, "wb") as f:
-                        f.write(image_bytes)
-                    
-                    # Store image data + location
-                    page_images.append({
-                        "path": str(saved_path),
-                        "rect": img_rect, # (x0, y0, x1, y1)
-                        "caption": "Unknown Diagram"
-                    })
-                    
-                except Exception:
-                    pass
-
-            # 3. SPATIAL CAPTIONING (The Fix)
-            # Find text immediately below the image
-            for img in page_images:
-                img_x0, img_y0, img_x1, img_y1 = img["rect"]
-                
-                best_caption = "None"
-                min_dist = 1000
-                
-                for block in text_blocks:
-                    bx0, by0, bx1, by1, btext, _, _ = block
-                    
-                    # Check if text is BELOW image (by0 > img_y1)
-                    # And within reasonable distance (e.g., 50 pixels)
-                    vertical_dist = by0 - img_y1
-                    
-                    # Check horizontal overlap (is text roughly centered under image?)
-                    # (Simple check: text shouldn't be way off to the left/right)
-                    horizontal_overlap = max(0, min(img_x1, bx1) - max(img_x0, bx0))
-                    
-                    if 0 < vertical_dist < 60 and horizontal_overlap > 0:
-                        if vertical_dist < min_dist:
-                            min_dist = vertical_dist
-                            # Clean text
-                            clean_text = btext.strip().replace('\n', ' ')
-                            if len(clean_text) > 5: # Ignore page numbers
+                    for block in text_blocks:
+                        bx0, by0, bx1, by1, btext = block[:5]
+                        clean_text = btext.strip().replace('\n', ' ')
+                        
+                        # 1. Vertical Check: Text must be BELOW image
+                        v_dist = by0 - img_rect.y1 
+                        
+                        # 2. Horizontal Overlap Check (The Fix)
+                        # Instead of strict centering, we check if they overlap horizontally
+                        overlap_width = max(0, min(img_rect.x1, bx1) - max(img_rect.x0, bx0))
+                        text_width = bx1 - bx0
+                        
+                        # Calculate overlap ratio (Avoid division by zero)
+                        overlap_ratio = overlap_width / text_width if text_width > 0 else 0
+                        
+                        # Rules:
+                        # - Must be within 50px vertically (tight association)
+                        # - Must overlap horizontally by at least 50% OR be contained within image width
+                        if 0 < v_dist < 50 and overlap_ratio > 0.5:
+                            # Prefer the CLOSEST text block
+                            if v_dist < min_v_dist:
+                                min_v_dist = v_dist
                                 best_caption = clean_text
-                
-                img["caption"] = best_caption
-                if best_caption != "None":
-                    print(f"✅ Linked Caption: '{best_caption}' to Image on Page {page_num}")
 
-            # 4. CREATE CHUNKS
-            
-            # A. Main Text Chunk
-            text_content = page.get_text()
-            batch.append({
-                "text": text_content,
-                "metadata": {
-                    "source": filename, 
-                    "page": page_num + 1,
-                    "image_path": page_images[0]["path"] if page_images else "None",
-                    "image_caption": "See Image Index",
-                    "type": "text"
-                }
-            })
+                    # Orphan Cull: Only index if we found a caption
+                    if best_caption == "None":
+                        continue
 
-            # B. Image Index Chunks
-            for img in page_images:
-                # We inject the Spatial Caption into the searchable text
-                # This guarantees retrieval when you search "Salivary Glands"
-                desc = f"DIAGRAM/FIGURE: {img['caption']}. Found on page {page_num+1}."
+                    page_assets.append({
+                        "xref": xref,
+                        "rect": [img_rect.x0, img_rect.y0, img_rect.x1, img_rect.y1],
+                        "caption": best_caption
+                    })
+                    print(f"✅ [INDEXED] '{best_caption}' -> Image {xref} (Page {page_num+1})")
                 
+                except Exception as e:
+                    print(f"⚠️ Image Error: {e}")
+
+            # Text Chunks
+            raw_text = page.get_text().strip()
+            if raw_text:
                 batch.append({
-                    "text": desc, 
+                    "text": raw_text,
                     "metadata": {
-                        "source": filename,
-                        "page": page_num + 1,
-                        "image_path": img["path"],
-                        "image_caption": img["caption"],
-                        "type": "image_index"
+                        "source": str(file_path), "page": page_num + 1, "type": "text",
+                        "image_caption": "None", "image_rect": [0.0]*4, "image_xref": 0, "image_path": "None"
                     }
                 })
 
-            if status_callback:
-                status_callback(f"Pg {page_num+1}: Processed {len(page_images)} images.")
+            # Image Chunks
+            for asset in page_assets:
+                batch.append({
+                    "text": f"DIAGRAM: {asset['caption']} (Ref: Page {page_num+1})",
+                    "metadata": {
+                        "source": str(file_path), "page": page_num + 1, "type": "image_index",
+                        "image_caption": asset['caption'],
+                        "image_rect": asset['rect'],
+                        "image_xref": asset['xref'],
+                        "image_path": "None"
+                    }
+                })
 
             if len(batch) >= BATCH_SIZE:
                 yield batch
                 batch = []
-                time.sleep(0.05)
+                time.sleep(0.01)
 
         if batch:
             yield batch
