@@ -15,12 +15,10 @@ class VectorDB:
         """Establishes connection WITHOUT auto-wiping data."""
         self.db = lancedb.connect(str(DB_DIR))
         
-        # Check if table exists
         if "vectors" in self.db.table_names():
             table = self.db.open_table("vectors")
             print(f"--- DEBUG: Table found. Schema fields: {table.schema.names} ---")
             
-            # DISABLE AUTO-WIPE: We only print a warning now.
             if "image_rect" not in table.schema.names:
                 print("⚠️ WARNING: Potential schema mismatch detected, but KEEPING DATA.")
         else:
@@ -58,7 +56,6 @@ class VectorDB:
             data = []
             for i, vector in enumerate(vectors):
                 meta = metadatas[i]
-                # Enforce schema consistency
                 meta.setdefault("image_rect", [0.0, 0.0, 0.0, 0.0])
                 meta.setdefault("image_xref", 0)
                 meta.setdefault("image_caption", "None")
@@ -71,15 +68,16 @@ class VectorDB:
                 print(f"✅ DB committed {len(data)} chunks.")
         except Exception as e:
             print(f"⚠️ Add Error: {e}")
-            # Do NOT call _connect() recursively to avoid loops
 
     def search(self, query, top_k=25):
         try:
+            # --- THE FIX: Force LanceDB to open the freshest version of the table! ---
+            self.table = self.db.open_table("vectors")
+            
             print(f"--- DEBUG: Semantic Search for '{query}' ---")
             query_vector = self.embedder.embed(query)
             if query_vector is None: return []
             
-            # Fetch more results to ensure fallback candidates exist
             results = self.table.search(query_vector).metric("cosine").limit(top_k + 20).to_list()
             clean_results = [r for r in results if r['text'] != 'init'][:top_k]
             print(f"--- DEBUG: Semantic Search found {len(clean_results)} results ---")
@@ -90,12 +88,14 @@ class VectorDB:
 
     def search_keyword(self, query, top_k=15):
         try:
+            # --- THE FIX: Force LanceDB to open the freshest version of the table! ---
+            self.table = self.db.open_table("vectors")
+            
             keywords = [w.lower() for w in query.split() if len(w) > 2]
             if not keywords: return []
             
             print(f"--- DEBUG: Keyword Search for {keywords} ---")
             
-            # Fetch all rows safely
             try:
                 all_rows = self.table.search().limit(10000).to_list()
             except Exception:

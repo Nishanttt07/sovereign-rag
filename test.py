@@ -1,37 +1,68 @@
-import lancedb
-import pandas as pd
-from core.config import DB_DIR
+import streamlit as st
+import fitz
+from PIL import Image
+import io
+import base64
+import requests
 
-def inspect():
-    print(f"📂 Opening Database at: {DB_DIR}")
-    try:
-        db = lancedb.connect(str(DB_DIR))
-        if "vectors" not in db.table_names():
-            print("❌ Error: 'vectors' table does not exist. Index is empty.")
-            return
-            
-        table = db.open_table("vectors")
-        # Fetch all data (up to 10,000 chunks)
-        df = table.search().limit(10000).to_pandas()
-        
-        print(f"✅ Total Chunks Found: {len(df)}")
-        
-        # Filter for 'tides'
-        tide_chunks = df[df['text'].str.contains("tide", case=False, na=False)]
-        
-        if not tide_chunks.empty:
-            print("\n✅ FOUND 'TIDE' DATA:")
-            for _, row in tide_chunks.iterrows():
-                print(f" - Page {row['metadata']['page']}: {row['text'][:100]}...")
-        else:
-            print("\n❌ 'TIDE' NOT FOUND in database.")
-            print("   (This confirms the text was not in the uploaded PDF)")
+st.title("PDF Image Explainer")
 
-        print("\n📊 Sample of stored topics:")
-        print(df[['text', 'metadata']].head(5))
+API_URL = "https://api.moondream.ai/v1/query"
+API_KEY = "YOUR_API_KEY"
 
-    except Exception as e:
-        print(f"⚠️ Inspection Error: {e}")
+def extract_images(pdf_bytes):
+    images = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-if __name__ == "__main__":
-    inspect()
+    for page in doc:
+        for img in page.get_images(full=True):
+            xref = img[0]
+            base = doc.extract_image(xref)
+            image = Image.open(io.BytesIO(base["image"]))
+            images.append(image)
+
+    return images
+
+
+def explain_image(image):
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    img_b64 = base64.b64encode(buffered.getvalue()).decode()
+
+    payload = {
+        "image": img_b64,
+        "question": "Explain this image."
+    }
+
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    r = requests.post(API_URL, json=payload, headers=headers)
+
+    return r.json()["answer"]
+
+
+uploaded = st.file_uploader("Upload PDF")
+
+if uploaded:
+
+    images = extract_images(uploaded.read())
+
+    if "index" not in st.session_state:
+        st.session_state.index = 0
+
+    idx = st.session_state.index
+
+    st.image(images[idx])
+
+    if st.button("Explain"):
+        st.write(explain_image(images[idx]))
+
+    col1, col2 = st.columns(2)
+
+    if col1.button("Previous") and idx > 0:
+        st.session_state.index -= 1
+        st.rerun()
+
+    if col2.button("Next") and idx < len(images)-1:
+        st.session_state.index += 1
+        st.rerun()
