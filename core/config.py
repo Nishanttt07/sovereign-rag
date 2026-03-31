@@ -21,7 +21,7 @@ for d in [RAW_PDFS_DIR, EXTRACTED_IMAGES_DIR, DB_DIR, GRAPH_DIR, SQL_DB_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # --- 2. LOCAL MODEL CONFIGURATION ---
-LLM_MODEL = "phi3:mini"
+LLM_MODEL = "llama3:8b"
 VISION_MODEL = "moondream"
 # THE HEAVYWEIGHT MODEL:
 EMBEDDING_MODEL = "mxbai-embed-large" 

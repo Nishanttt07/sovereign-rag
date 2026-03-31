@@ -7,7 +7,9 @@ import re
 class RAGPipeline:
     def __init__(self):
         self.db = VectorDB()
-        self.llm = LLMEngine()
+        # 🔥 THE UPGRADE: We explicitly call Llama 3.2 (3B) for the final chat synthesis.
+        # It fits perfectly in 4GB VRAM alongside Qwen and provides excellent, fast summaries.
+        self.llm = LLMEngine(model_name="llama3.2")
 
     def _smart_rerank(self, results, query):
         clean_query = re.sub(r'[^\w\s]', '', query.lower())
@@ -16,82 +18,26 @@ class RAGPipeline:
         reranked = []
         for res in results:
             meta = res.get('metadata', {})
-            text = res.get('text', '').lower().replace('|', ' ') 
-            caption = meta.get('image_caption', 'None').lower()
-            
-            clean_caption = re.sub(r'[^\w\s]', '', caption)
-            clean_text = re.sub(r'[^\w\s]', '', text)
-            combined_clean = clean_caption + " " + clean_text
-            
             score = 0
             distance = res.get('_distance', 1.0)
-            score += max(0, (1.0 - distance) * 500) 
-            score += res.get('score', 0) * 20
+            score += max(0, (1.0 - distance) * 500)
             
             if meta.get('type') == "image_index":
-                if clean_query in clean_caption: score += 3000
-                elif clean_query in combined_clean: score += 2000 
-                match_count = sum(1 for t in query_terms if t in combined_clean)
-                score += (match_count * 100) 
-            
-            elif meta.get('type') == "text":
-                if clean_query in clean_text: score += 1500 
-                match_count = sum(1 for t in query_terms if t in clean_text)
-                score += (match_count * 50)
-
+                score += 2000
+                
             reranked.append((score, res))
-        
+            
         reranked.sort(key=lambda x: x[0], reverse=True)
         return [item[1] for item in reranked]
 
-    def query_with_feedback(self, query):
-        query_lower = query.lower()
-        sql_context = ""
-        
-        # ==========================================
-        # 🚦 THE ROUTER: TABULAR DATA CHECK
-        # ==========================================
-        # Check if query hits SQL keywords or references a table
-        use_sql = any(trigger in query_lower for trigger in SQL_TRIGGERS) or "table" in query_lower
-        
-        if use_sql:
-            yield ("status", "📊 Querying SQL Database Agent...")
-            sql_agent = SQLAgent()
-            sql_result = sql_agent.query(query)
-            
-            # If the SQL Agent found something, we wrap it in a clear tag
-            if sql_result and "Error" not in sql_result:
-                sql_context = f"\n[TABULAR DATABASE RESULTS]:\n{sql_result}\n"
-            else:
-                sql_context = "\n[SQL NOTIFICATION]: SQL Agent searched but found no matching records.\n"
-
-        # ==========================================
-        # 🔍 VECTOR SEARCH: UNSTRUCTURED DATA (PDFs)
-        # ==========================================
-        yield ("status", "🔍 Searching Document Vectors...")
-        
-        all_results = []
-        vec_res = self.db.search(query, top_k=25) 
-        key_res = self.db.search_keyword(query, top_k=20)
-        all_results.extend(vec_res + key_res)
-
-        seen = set()
-        unique_results = []
-        for r in all_results:
-            if r['text'] not in seen:
-                unique_results.append(r); seen.add(r['text'])
-        
-        results = self._smart_rerank(unique_results, query)[:15]
-
-        # ==========================================
-        # 🖼️ SPATIAL ASSET EXTRACTION
-        # ==========================================
+    def _extract_images(self, results, query_lower):
+        """Safely extracts relevant images and guarantees a list is returned."""
         clean_query = re.sub(r'[^\w\s]', '', query_lower)
         query_terms = list(set([w for w in clean_query.split() if len(w) > 2 and w not in STOP_WORDS]))
         image_candidates = []
         
         for res in results:
-            meta = res['metadata']
+            meta = res.get('metadata', {})
             if meta.get('type') == 'image_index':
                 cap = meta.get('image_caption', 'None').lower()
                 clean_cap = re.sub(r'[^\w\s]', '', cap)
@@ -106,37 +52,74 @@ class RAGPipeline:
                     })
 
         image_candidates.sort(key=lambda x: x['score'], reverse=True)
-        for asset in image_candidates[:2]:
+        return image_candidates[:2]  # Always returns a list, even if empty
+
+    def query_with_feedback(self, query):
+        query_lower = query.lower()
+        sql_context = ""
+        
+        # 🚦 THE ROUTER
+        is_sql_query = any(trigger in query_lower for trigger in SQL_TRIGGERS) or "table" in query_lower or "rows" in query_lower
+
+        # ==========================================
+        # 1. SQL AGENT EXECUTION & DIRECT UI BYPASS
+        # ==========================================
+        if is_sql_query:
+            yield ("status", "📊 Fetching database records (Qwen 2.5)...")
+            agent = SQLAgent()
+            sql_context = agent.query(query)
+            
+            if sql_context and "Error" not in sql_context and "empty" not in sql_context.lower():
+                # 🔥 THE BYPASS: Yield the markdown table directly to the frontend!
+                # This bypasses the LLM's tendency to refuse or hallucinate tables.
+                yield ("text", f"### 🗄️ Retrieved Records:\n{sql_context}\n\n---\n**🤖 AI Analysis:**\n")
+
+        # ==========================================
+        # 2. VECTOR SEARCH (PDFs)
+        # ==========================================
+        # If SQL was successful, we drastically reduce the PDF chunks to save VRAM 
+        # and prevent Llama 3.2 from getting distracted.
+        top_k_val = 2 if sql_context else 15 
+        
+        yield ("status", "🔍 Searching documents...")
+        all_results = self.db.search(query, top_k=top_k_val) + self.db.search_keyword(query, top_k=5)
+        
+        seen = set()
+        unique_results = []
+        for r in all_results:
+            if r['text'] not in seen:
+                unique_results.append(r)
+                seen.add(r['text'])
+                
+        results = self._smart_rerank(unique_results, query)[:top_k_val]
+
+        # Safely extract and yield spatial images
+        for asset in self._extract_images(results, query_lower): 
             yield ("spatial_image", asset)
 
         # ==========================================
-        # 🧠 HYBRID SYNTHESIS (LLM) - STRENGTHENED
+        # 3. LLM SYNTHESIS (Llama 3.2)
         # ==========================================
-        yield ("status", "⚡ Synthesizing Multi-Modal Answer...")
+        yield ("status", "⚡ Synthesizing response (Llama 3.2)...")
         
-        pdf_context = ""
-        if results:
-            results.sort(key=lambda x: x['metadata'].get('page', 0))
-            pdf_context = "\n[DOCUMENT EXCERPTS FROM PDF]:\n" + "\n".join([f"[Page {r['metadata']['page']}]: {r['text']}" for r in results])
+        pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
         
-        # Merge SQL Data and PDF Data
-        master_context = f"{sql_context}\n{pdf_context}"
-        
-        # This prompt is designed to stop the "I am an AI and can't see databases" lie.
-        final_prompt = f"""{SYSTEM_PROMPT}
-        
-        ### DATA SOURCE INSTRUCTIONS:
-        - Below is CONTEXT extracted from a SQL Database and a PDF Vector Store.
-        - If '[TABULAR DATABASE RESULTS]' is present, it contains real data from the user's spreadsheets. Use it!
-        - Do NOT claim you cannot access databases. The data is already provided in this prompt.
-        - Cite the source (SQL Database or PDF Page Number) for every fact you provide.
-        - If both sources are empty, say "NO CONTEXT FOUND !!".
-        
-        ### CONTEXT DATA:
-        {master_context}
+        # A highly de-weaponized prompt. We don't say "SQL" or "Database" to avoid triggering
+        # any internal safety refusals about external connections.
+        final_system_prompt = f"""{SYSTEM_PROMPT}
+        You are a helpful technical assistant analyzing text records.
+        Do NOT mention that you are an AI. 
+        Do NOT apologize. 
+        Just directly answer the user's question based ONLY on the text below. 
+        If the data is provided in a table format below, summarize the key finding in 1 or 2 short sentences.
         """
-        
-        messages = [{'role': 'system', 'content': final_prompt}, {'role': 'user', 'content': query}]
+
+        context_to_send = f"RECORDS:\n{sql_context}\n\nMANUAL EXCERPTS:\n{pdf_text}"
+
+        messages = [
+            {'role': 'system', 'content': final_system_prompt},
+            {'role': 'user', 'content': f"Context:\n{context_to_send}\n\nQuestion: {query}"}
+        ]
         
         for chunk in self.llm.chat_stream(messages): 
             yield ("text", chunk)
