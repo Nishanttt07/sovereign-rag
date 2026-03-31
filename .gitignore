@@ -26,7 +26,6 @@ Thumbs.db
 .idea/
 
 # Models
-models/
 *.pt
 *.bin
 *.safetensors

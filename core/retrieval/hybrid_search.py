@@ -51,20 +51,24 @@ class RAGPipeline:
         # ==========================================
         # 🚦 THE ROUTER: TABULAR DATA CHECK
         # ==========================================
-        # Check if the user's prompt contains any YAML SQL triggers
-        use_sql = any(trigger in query_lower for trigger in SQL_TRIGGERS)
+        # Check if query hits SQL keywords or references a table
+        use_sql = any(trigger in query_lower for trigger in SQL_TRIGGERS) or "table" in query_lower
         
         if use_sql:
-            yield ("status", "📊 Analyzing Tabular Data via SQL Agent...")
+            yield ("status", "📊 Querying SQL Database Agent...")
             sql_agent = SQLAgent()
             sql_result = sql_agent.query(query)
-            if sql_result and "[SQL Agent searched the database but found 0 results" not in sql_result:
+            
+            # If the SQL Agent found something, we wrap it in a clear tag
+            if sql_result and "Error" not in sql_result:
                 sql_context = f"\n[TABULAR DATABASE RESULTS]:\n{sql_result}\n"
+            else:
+                sql_context = "\n[SQL NOTIFICATION]: SQL Agent searched but found no matching records.\n"
 
         # ==========================================
         # 🔍 VECTOR SEARCH: UNSTRUCTURED DATA (PDFs)
         # ==========================================
-        yield ("status", "🔍 Searching Document Database...")
+        yield ("status", "🔍 Searching Document Vectors...")
         
         all_results = []
         vec_res = self.db.search(query, top_k=25) 
@@ -79,12 +83,6 @@ class RAGPipeline:
         
         results = self._smart_rerank(unique_results, query)[:15]
 
-        # Failsafe: If BOTH databases return absolutely nothing
-        if not results and not sql_context:
-            yield ("status", "❌ Not found.")
-            yield ("text", "I'm sorry, but NO CONTEXT FOUND in Documents or Databases!!")
-            return
-
         # ==========================================
         # 🖼️ SPATIAL ASSET EXTRACTION
         # ==========================================
@@ -96,28 +94,15 @@ class RAGPipeline:
             meta = res['metadata']
             if meta.get('type') == 'image_index':
                 cap = meta.get('image_caption', 'None').lower()
-                rich_text = res.get('text', '').lower().replace('|', ' ')
-                
                 clean_cap = re.sub(r'[^\w\s]', '', cap)
-                combined_clean = clean_cap + " " + re.sub(r'[^\w\s]', '', rich_text)
+                match_count = sum(1 for k in query_terms if k in clean_cap)
                 
-                rule_a_exact = (clean_query in combined_clean)
-                rule_a_super_exact = (clean_query in clean_cap) 
-                
-                match_count = sum(1 for k in query_terms if k in combined_clean)
-                required_matches = max(2, int(len(query_terms) * float(SEARCH_THRESHOLD)))
-                rule_b_keywords = match_count >= required_matches if query_terms else False
-                
-                if rule_a_exact or rule_b_keywords:
-                    img_score = match_count
-                    if rule_a_exact: img_score += 1000 
-                    if rule_a_super_exact: img_score += 5000 
-                        
+                if (clean_query in clean_cap) or (match_count >= 2):
                     image_candidates.append({
                         "source": meta.get('source'), "page": meta.get('page'),
                         "rect": meta.get('image_rect'), "xref": meta.get('image_xref', 0),
                         "caption": meta.get('image_caption'), "image_path": meta.get('image_path', 'None'),
-                        "score": img_score 
+                        "score": match_count 
                     })
 
         image_candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -125,25 +110,29 @@ class RAGPipeline:
             yield ("spatial_image", asset)
 
         # ==========================================
-        # 🧠 HYBRID SYNTHESIS (LLM)
+        # 🧠 HYBRID SYNTHESIS (LLM) - STRENGTHENED
         # ==========================================
         yield ("status", "⚡ Synthesizing Multi-Modal Answer...")
         
-        # Combine PDF Text
         pdf_context = ""
         if results:
             results.sort(key=lambda x: x['metadata'].get('page', 0))
-            pdf_context = "\n[DOCUMENT RESULTS]:\n" + "\n".join([f"[Page {r['metadata']['page']}]: {r['text']}" for r in results])
+            pdf_context = "\n[DOCUMENT EXCERPTS FROM PDF]:\n" + "\n".join([f"[Page {r['metadata']['page']}]: {r['text']}" for r in results])
         
         # Merge SQL Data and PDF Data
-        master_context = sql_context + pdf_context
+        master_context = f"{sql_context}\n{pdf_context}"
         
+        # This prompt is designed to stop the "I am an AI and can't see databases" lie.
         final_prompt = f"""{SYSTEM_PROMPT}
         
-        Use ONLY the provided context below to answer the user. 
-        If the context does not contain the answer, say "NO CONTEXT FOUND !!".
+        ### DATA SOURCE INSTRUCTIONS:
+        - Below is CONTEXT extracted from a SQL Database and a PDF Vector Store.
+        - If '[TABULAR DATABASE RESULTS]' is present, it contains real data from the user's spreadsheets. Use it!
+        - Do NOT claim you cannot access databases. The data is already provided in this prompt.
+        - Cite the source (SQL Database or PDF Page Number) for every fact you provide.
+        - If both sources are empty, say "NO CONTEXT FOUND !!".
         
-        CONTEXT: 
+        ### CONTEXT DATA:
         {master_context}
         """
         
