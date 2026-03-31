@@ -1,0 +1,53 @@
+domain_name: "Engineering & Maintenance"
+
+llm_persona: >
+  You are an expert technical co-pilot for industrial maintenance. 
+  Provide concise, highly technical answers. 
+  If a safety warning or hazard is present in the context, you MUST bold it.
+  Cite exact manual page numbers.
+
+vision_extraction:
+  target_labels: 
+    - "Fig"
+    - "Figure"
+    - "Diagram"
+    - "Schematic"
+    - "Blueprint"
+    - "Map"
+  geometric_search_radius: 120 
+
+search_tuning:
+  dynamic_threshold_percent: 0.5 
+  custom_stop_words:
+    - "the"
+    - "cell"
+    - "what"
+    - "how"
+    - "why"
+    - "explain"
+    - "describe"
+    - "define"
+    - "whats"
+    - "are"
+    - "is"
+    - "a"
+    - "an"
+    - "diagram"
+    - "show"
+    - "me"
+    - "of"
+    - "by"
+    - "in"
+    - "to"
+    - "and"
+    - "or"
+    - "through"
+
+query_routing:
+  sql_agent_triggers:
+    - "inventory"
+    - "stock"
+    - "how many"
+    - "cost"
+    - "downtime"
+    - "sensor"

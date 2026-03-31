@@ -1,0 +1,18 @@
+# --- Frontend & UI ---
+streamlit==1.54.0
+pillow==12.1.1
+
+# --- Core Data Processing ---
+pandas==2.3.3
+openpyxl>=3.1.2 
+PyYAML==6.0.3
+
+# --- PDF & Vision Processing ---
+PyMuPDF>=1.23.0  # This is the 'fitz' library
+
+# --- Vector Database ---
+lancedb>=0.5.0
+pyarrow==23.0.1
+
+# --- API & Network ---
+requests==2.32.5

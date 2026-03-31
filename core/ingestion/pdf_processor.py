@@ -3,7 +3,7 @@ import os
 import time
 import re
 import math
-from core.config import RAW_PDFS_DIR
+from core.config import RAW_PDFS_DIR, VISION_LABELS, VISION_RADIUS
 
 def get_shortest_distance(rect1, rect2):
     x_dist = max(0, rect1.x0 - rect2.x1, rect2.x0 - rect1.x1)
@@ -73,6 +73,10 @@ class PDFProcessor:
         doc = fitz.open(file_path)
         extracted_assets = []
 
+        # DYNAMIC REGEX: Build the pattern from the YAML VISION_LABELS
+        # This joins ["Fig", "Table", "Map"] into "Fig|Table|Map"
+        labels_pattern = "|".join(VISION_LABELS)
+        
         for page_num, page in enumerate(doc):
             text_blocks = page.get_text("blocks")
             image_list = page.get_images(full=True)
@@ -106,7 +110,11 @@ class PDFProcessor:
                 if block[6] == 1: continue 
                 text = block[4].strip().replace('\n', ' ')
                 
-                match = re.search(r'^(?:Fig|Figure|Table|Diagram|Activity|Map)[\s\-\.:]*\d*|^\d+\.\d+', text, re.IGNORECASE)
+                # USING DYNAMIC REGEX PATTERN HERE
+                # Also preserves the textbook numbering format (e.g. "1.1")
+                regex_pattern = rf'^(?:{labels_pattern})[\s\-\.:]*\d*|^\d+\.\d+'
+                match = re.search(regex_pattern, text, re.IGNORECASE)
+                
                 if match:
                     cap_id = match.group(0).strip()
                     page_captions.append({
@@ -115,7 +123,9 @@ class PDFProcessor:
 
             for cap in page_captions:
                 best_cluster = None
-                min_dist = 120 
+                
+                # USING DYNAMIC RADIUS HERE
+                min_dist = VISION_RADIUS 
                 
                 for cluster in clustered_rects:
                     dist = get_shortest_distance(cap['rect'], cluster)
@@ -123,7 +133,8 @@ class PDFProcessor:
                         min_dist = dist
                         best_cluster = cluster
 
-                if not best_cluster or min_dist > 120:
+                # USING DYNAMIC RADIUS HERE
+                if not best_cluster or min_dist > VISION_RADIUS:
                     continue
 
                 try:

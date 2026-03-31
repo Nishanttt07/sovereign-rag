@@ -6,14 +6,19 @@ import os
 
 from core.retrieval.hybrid_search import RAGPipeline
 from ui.sidebar import render_sidebar
+from core.config import DOMAIN_CONFIG # <-- IMPORT THE CONFIG
+
+# Get the domain name, default to Sovereign RAG if not found
+app_title = DOMAIN_CONFIG.get("domain_name", "Sovereign RAG")
 
 # 1. PAGE CONFIGURATION
-st.set_page_config(page_title="Sovereign RAG", layout="wide", page_icon="⚡")
-st.title("⚡ Sovereign RAG")
+st.set_page_config(page_title=app_title, layout="wide", page_icon="⚡")
+st.title(f"⚡ {app_title}") 
 
 # Sidebar for file uploads and database management
 render_sidebar()
 
+# ... (The rest of your app.py remains exactly the same!) ...
 # 2. CHAT HISTORY & STATE INITIALIZATION
 if "messages" not in st.session_state:
     st.session_state.messages = []
