@@ -4,12 +4,13 @@ import shutil
 import lancedb
 import time
 import threading
-import json # <--- NEW IMPORT
+import json 
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 from core.config import RAW_PDFS_DIR, DB_DIR, SQL_DB_PATH, DATA_DIR
 from core.ingestion.pdf_processor import PDFProcessor
 from core.ingestion.tabular_processor import TabularProcessor
+from core.ingestion.office_processor import OfficeProcessor  # <-- NEW IMPORT
 from core.retrieval.vector_search import VectorDB
 
 # --- PERMANENT MEMORY LOGIC ---
@@ -33,9 +34,10 @@ def render_sidebar():
     with st.sidebar:
         st.header("📂 Document Manager")
         
+        # Accepts all necessary file types
         uploaded_files = st.file_uploader(
             "Upload Documents or Spreadsheets", 
-            type=["pdf", "csv", "xlsx"], 
+            type=["pdf", "csv", "xlsx", "docx"], 
             key="main_uploader", 
             accept_multiple_files=True
         )
@@ -63,7 +65,7 @@ def render_sidebar():
                             vision_thread.start()
                             status_pill.success(f"{uploaded_file.name} Ready! Diagrams indexing in background...", icon="✨")
                         
-                        # PATH B: Tabular
+                        # PATH B: Tabular (CSV / XLSX for SQL database)
                         elif ext in ['csv', 'xlsx']:
                             status_pill.info(f"Converting {uploaded_file.name} to SQL Database...", icon="📊")
                             processor = TabularProcessor()
@@ -73,8 +75,27 @@ def render_sidebar():
                                 status_pill.success(f"✅ {uploaded_file.name} added to SQL Database!")
                             else:
                                 status_pill.error(f"❌ Failed: {result.get('message')}")
+                                
+                        # 🔥 PATH C: Word Document (DOCX for Vector database)
+                        elif ext == 'docx':
+                            status_pill.info(f"Extracting Markdown from {uploaded_file.name}...", icon="📝")
+                            
+                            # 1. Process the DOCX
+                            processor = OfficeProcessor()
+                            chunks = processor.process_file(
+                                str(save_path), 
+                                status_callback=lambda msg: status_pill.info(msg, icon="📝")
+                            )
+                            
+                            # 2. Save to Vector Database
+                            if chunks:
+                                db = VectorDB()
+                                db.add_chunks(chunks)
+                                status_pill.success(f"✅ {uploaded_file.name} added to Vector Database!")
+                            else:
+                                status_pill.error(f"❌ Failed to process {uploaded_file.name}")
 
-                        # Update memory and save to hard drive!
+                        # Update memory and save to hard drive
                         st.session_state.processed_files.add(uploaded_file.name)
                         save_ingestion_log(st.session_state.processed_files)
                         
@@ -126,7 +147,7 @@ def render_sidebar():
         st.subheader("📚 Active Files")
         if os.path.exists(RAW_PDFS_DIR):
             for f in os.listdir(RAW_PDFS_DIR):
-                if f.lower().endswith(('.pdf', '.csv', '.xlsx')):
+                if f.lower().endswith(('.pdf', '.csv', '.xlsx', '.docx')):
                     if f in st.session_state.processed_files:
                         st.markdown(f"✅ `{f}`")
                     else:

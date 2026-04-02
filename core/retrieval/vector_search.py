@@ -4,6 +4,9 @@ import time
 from core.config import DB_DIR
 from core.models.embedder import Embedder
 
+import pymupdf4llm
+from langchain_text_splitters import MarkdownTextSplitter
+
 class VectorDB:
     def __init__(self):
         print(f"--- DEBUG: Initializing VectorDB at {DB_DIR} ---")
@@ -46,6 +49,34 @@ class VectorDB:
         self.db.create_table("vectors", data=data, mode="overwrite")
         print("✅ Database initialized with Complete Schema.")
 
+    # ==========================================
+    # 📄 PDF INGESTION (Markdown Preserved)
+    # ==========================================
+    def ingest_pdf_markdown(self, pdf_path):
+        print(f"📄 Processing PDF {pdf_path} with Markdown Extractor...")
+        try:
+            md_pages = pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
+            splitter = MarkdownTextSplitter(chunk_size=1000, chunk_overlap=150)
+            
+            final_chunks = []
+            for page_data in md_pages:
+                page_text = page_data.get('text', '')
+                page_num = page_data.get('metadata', {}).get('page', 0) + 1 
+                text_chunks = splitter.create_documents([page_text])
+                
+                for chunk in text_chunks:
+                    final_chunks.append({
+                        "text": chunk.page_content,
+                        "metadata": {"source": os.path.basename(pdf_path), "page": page_num, "type": "text"}
+                    })
+            
+            self.add_chunks(final_chunks)
+            print("✅ PDF Ingested Successfully!")
+            return True
+        except Exception as e:
+            print(f"❌ Error ingesting PDF: {e}")
+            return False
+
     def add_chunks(self, chunks):
         try:
             if not chunks: return
@@ -71,9 +102,7 @@ class VectorDB:
 
     def search(self, query, top_k=25):
         try:
-            # --- THE FIX: Force LanceDB to open the freshest version of the table! ---
             self.table = self.db.open_table("vectors")
-            
             print(f"--- DEBUG: Semantic Search for '{query}' ---")
             query_vector = self.embedder.embed(query)
             if query_vector is None: return []
@@ -88,10 +117,14 @@ class VectorDB:
 
     def search_keyword(self, query, top_k=15):
         try:
-            # --- THE FIX: Force LanceDB to open the freshest version of the table! ---
+            import re
             self.table = self.db.open_table("vectors")
             
-            keywords = [w.lower() for w in query.split() if len(w) > 2]
+            # 🔥 THE FIX: Ignore conversational filler words
+            ignore_words = {"what", "is", "are", "the", "how", "why", "who", "when", "where", "can", "you", "me", "and", "for", "with", "about", "explain", "summarize", "describe", "details", "of", "in", "to", "a", "an"}
+            clean_query = re.sub(r'[^\w\s\.]', '', query.lower())
+            
+            keywords = [w for w in clean_query.split() if len(w) > 2 and w not in ignore_words]
             if not keywords: return []
             
             print(f"--- DEBUG: Keyword Search for {keywords} ---")
@@ -107,11 +140,13 @@ class VectorDB:
                 
                 t = str(row['text']).lower()
                 c = str(row['metadata'].get('image_caption', '')).lower()
+                s = str(row['metadata'].get('source', '')).lower()
                 
                 score = 0
                 for k in keywords:
                     if k in t: score += 2
                     if k in c: score += 10
+                    if k in s: score += 100 
                 
                 if score > 0:
                     row['score'] = score

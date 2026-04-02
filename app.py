@@ -3,10 +3,11 @@ import fitz  # PyMuPDF
 from PIL import Image
 import io
 import os
+import tempfile 
 
 from core.retrieval.hybrid_search import RAGPipeline
 from ui.sidebar import render_sidebar
-from core.config import DOMAIN_CONFIG # <-- IMPORT THE CONFIG
+from core.config import DOMAIN_CONFIG 
 
 # Get the domain name, default to Sovereign RAG if not found
 app_title = DOMAIN_CONFIG.get("domain_name", "Sovereign RAG")
@@ -15,10 +16,19 @@ app_title = DOMAIN_CONFIG.get("domain_name", "Sovereign RAG")
 st.set_page_config(page_title=app_title, layout="wide", page_icon="⚡")
 st.title(f"⚡ {app_title}") 
 
-# Sidebar for file uploads and database management
-render_sidebar()
+def get_pipeline():
+    return RAGPipeline()
 
-# ... (The rest of your app.py remains exactly the same!) ...
+# Initialize the pipeline early so the sidebar can access it
+rag = get_pipeline()
+
+# Sidebar for file uploads and database management
+with st.sidebar:
+    render_sidebar()
+    
+    st.divider()
+
+
 # 2. CHAT HISTORY & STATE INITIALIZATION
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -29,18 +39,7 @@ if "vision_processing" not in st.session_state:
 if st.session_state.vision_processing:
     st.toast("🖼️ Diagrams are silently indexing in the background...", icon="🤖")
 
-# --- CACHE REMOVED ---
-# We no longer cache this so it always sees the freshest data!
-def get_pipeline():
-    return RAGPipeline()
-
-rag = get_pipeline()
-
 def render_spatial_image(asset):
-    """
-    Loads the pre-extracted Vision image first for speed.
-    Falls back to spatial PDF cropping if the image file isn't available.
-    """
     try:
         image_path = asset.get("image_path", "None")
         if image_path != "None" and os.path.exists(image_path):
@@ -118,12 +117,10 @@ if prompt := st.chat_input("Ask about your documents..."):
             elif event_type == "chunks":
                 retrieved_chunks = payload
                 
-                # --- 🛑 DEBUG PRINT ADDED HERE 🛑 ---
                 print("\n" + "="*60)
                 print(f"🔍 DEBUG: TOP 5 SEARCH RESULTS FOR '{prompt}'")
                 for i, chunk in enumerate(retrieved_chunks[:5]):
                     meta = chunk.get('metadata', {})
-                    # Get the distance (lower is better) or custom keyword score
                     dist = chunk.get('_distance', 'N/A')
                     score = chunk.get('score', 'N/A') 
                     
@@ -133,7 +130,6 @@ if prompt := st.chat_input("Ask about your documents..."):
                     print(f"Vector Dist: {dist} | Keyword Score: {score}")
                     print(f"Text Snippet: {chunk.get('text', '').replace(chr(10), ' ')[:250]}...")
                 print("="*60 + "\n")
-                # ------------------------------------
 
         status_box.update(label="✅ Complete", state="complete", expanded=False)
         answer_placeholder.markdown(full_response)
