@@ -11,6 +11,7 @@ from core.config import RAW_PDFS_DIR, DB_DIR, SQL_DB_PATH, DATA_DIR
 from core.ingestion.pdf_processor import PDFProcessor
 from core.ingestion.tabular_processor import TabularProcessor
 from core.ingestion.office_processor import OfficeProcessor  # <-- NEW IMPORT
+from core.ingestion.pptx_processor import PPTXProcessor
 from core.retrieval.vector_search import VectorDB
 
 # --- PERMANENT MEMORY LOGIC ---
@@ -37,7 +38,7 @@ def render_sidebar():
         # Accepts all necessary file types
         uploaded_files = st.file_uploader(
             "Upload Documents or Spreadsheets", 
-            type=["pdf", "csv", "xlsx", "docx"], 
+            type=["pdf", "csv", "xlsx", "docx", "pptx"], 
             key="main_uploader", 
             accept_multiple_files=True
         )
@@ -99,6 +100,25 @@ def render_sidebar():
                                 else:
                                     status_box.update(label=f"❌ Failed to process {uploaded_file.name}", state="error")
 
+                            # 🔥 PATH D: PowerPoint (PPTX for Vector database)
+                            elif ext == 'pptx':
+                                status_box.write("📽️ Extracting Text from Presentation...")
+                                
+                                processor = PPTXProcessor()
+                                chunks = processor.process_file(
+                                    str(save_path), 
+                                    status_callback=lambda msg: status_box.write(f"⏳ {msg}")
+                                )
+                                
+                                if chunks:
+                                    status_box.write("💾 Adding chunks to Vector DB...")
+                                    db = VectorDB()
+                                    db.add_chunks(chunks)
+                                    status_box.update(label=f"✅ {uploaded_file.name} added to Vector Database!", state="complete", expanded=False)
+                                    st.toast(f"Presentation '{uploaded_file.name}' indexed successfully!", icon="🚀")
+                                else:
+                                    status_box.update(label=f"❌ Failed to process {uploaded_file.name}", state="error")
+
                             # Update memory and save to hard drive
                             st.session_state.processed_files.add(uploaded_file.name)
                             save_ingestion_log(st.session_state.processed_files)
@@ -151,7 +171,7 @@ def render_sidebar():
         st.subheader("📚 Active Files")
         if os.path.exists(RAW_PDFS_DIR):
             for f in os.listdir(RAW_PDFS_DIR):
-                if f.lower().endswith(('.pdf', '.csv', '.xlsx', '.docx')):
+                if f.lower().endswith(('.pdf', '.csv', '.xlsx', '.docx', '.pptx')):
                     if f in st.session_state.processed_files:
                         st.markdown(f"✅ `{f}`")
                     else:

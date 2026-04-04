@@ -163,8 +163,8 @@ CRITICAL RULES:
             pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
             context_to_send = f"MANUAL EXCERPTS:\n{pdf_text}"
             task_instruction = (
-                "Task: Answer the user's question using ONLY the provided CONTEXT.\n"
-                "If the exact answer cannot be found in the CONTEXT, you must reply with exactly this phrase and nothing else: "
+                "Task: Fulfill the user's request (e.g., answering a question or summarizing a document) using ONLY the provided CONTEXT.\n"
+                "If the CONTEXT is entirely irrelevant or does not contain information to fulfill the request, you must reply with exactly this phrase and nothing else: "
                 "'I'm sorry, but the provided documents do not contain information about that.'"
             )
 
