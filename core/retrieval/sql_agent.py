@@ -46,8 +46,9 @@ class SQLAgent:
         {schema}
         
         CRITICAL RULES:
-        1. Dates in the database are stored in YYYY-MM-DD format. If the user provides a date in a different format (like DD-MM-YY, MM/DD/YYYY, or text like "April 25th"), you MUST convert it to YYYY-MM-DD in your WHERE clause.
+        1. Dates in the database are stored in YYYY-MM-DD format. If the user provides a date in a different format, you MUST convert it to YYYY-MM-DD.
         2. Use the exact column names provided in the schema. Use LIKE '%keyword%' for text searches to be safe.
+        3. If the user asks for the "last", "latest", "recent", or "bottom" records, you MUST use an ORDER BY clause (e.g., ORDER BY rowid DESC, or ORDER BY the ID column DESC) with a LIMIT clause.
         
         User Question: {user_question}
         

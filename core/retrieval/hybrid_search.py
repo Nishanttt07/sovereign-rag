@@ -13,7 +13,7 @@ class RAGPipeline:
         clean_query = re.sub(r'[^\w\s\.]', '', query.lower())
         query_lower = query.lower()
 
-        # 🔥 THE FIX 1: Detect if a specific filename is mentioned in the user's prompt
+        # 🔥 Detect if a specific filename is mentioned in the user's prompt
         target_source = None
         for res in results:
             source_val = str(res.get('metadata', {}).get('source', 'None'))
@@ -26,7 +26,7 @@ class RAGPipeline:
             meta = res.get('metadata', {})
             source_lower = str(meta.get('source', '')).lower()
 
-            # 🔥 THE FIX 2: Hard Isolation. If a file was requested, DROP chunks from all other files!
+            # 🔥 Hard Isolation: If a file was requested, drop chunks from all other files
             if target_source and target_source != source_lower:
                 continue
 
@@ -70,10 +70,23 @@ class RAGPipeline:
         return image_candidates[:2]
 
     def query_with_feedback(self, query):
-        query_lower = query.lower()
+        query_lower = query.lower().strip()
         sql_context = ""
         
-        is_sql_query = any(trigger in query_lower for trigger in SQL_TRIGGERS) or "table" in query_lower or "rows" in query_lower
+        # 🔥 Conversational Short-Circuit: Handle basic greetings immediately without RAG
+        greetings = {"hi", "hello", "hey", "who are you", "what are you", "hi there", "greetings"}
+        if query_lower in greetings:
+            yield ("text", "Hello! 👋 I am your local Sovereign RAG assistant. Please ask me a question about your uploaded documents.")
+            return
+        
+        # 🔥 The Router: Catches SQL triggers OR spreadsheet extensions
+        tabular_extensions = [".csv", ".xlsx"]
+        is_sql_query = (
+            any(trigger in query_lower for trigger in SQL_TRIGGERS) or 
+            "table" in query_lower or 
+            "row" in query_lower or
+            any(ext in query_lower for ext in tabular_extensions)
+        )
 
         # ==========================================
         # 1. SQL AGENT EXECUTION
@@ -89,42 +102,75 @@ class RAGPipeline:
                 sql_context = "" 
 
         # ==========================================
-        # 2. VECTOR SEARCH
+        # 2. VECTOR SEARCH (Absolute Isolation)
         # ==========================================
-        top_k_val = 3 if sql_context else 20 
-        
-        yield ("status", "🔍 Searching documents...")
-        all_results = self.db.search(query, top_k=top_k_val) + self.db.search_keyword(query, top_k=8)
-        
-        # 🔥 THE FIX 3: Intelligent Merge. Never overwrite a Keyword Score with a blank Semantic match!
-        unique_results = {}
-        for r in all_results:
-            txt = r['text']
-            if txt not in unique_results:
-                unique_results[txt] = r
-            else:
-                if 'score' in r and 'score' not in unique_results[txt]:
-                    unique_results[txt]['score'] = r['score']
-                if '_distance' in r:
-                    old_dist = unique_results[txt].get('_distance', 1.0)
-                    unique_results[txt]['_distance'] = min(old_dist, r['_distance'])
-                
-        results = self._smart_rerank(list(unique_results.values()), query)[:top_k_val]
+        results = []
+        # 🔥 ONLY run Vector Search if the SQL Agent didn't find anything
+        if not sql_context:
+            yield ("status", "🔍 Searching documents...")
+            all_results = self.db.search(query, top_k=20) + self.db.search_keyword(query, top_k=8)
+            
+            # Intelligent Merge: Never overwrite Keyword scores with blank Semantic matches
+            unique_results = {}
+            for r in all_results:
+                txt = r['text']
+                if txt not in unique_results:
+                    unique_results[txt] = r
+                else:
+                    if 'score' in r and 'score' not in unique_results[txt]:
+                        unique_results[txt]['score'] = r['score']
+                    if '_distance' in r:
+                        old_dist = unique_results[txt].get('_distance', 1.0)
+                        unique_results[txt]['_distance'] = min(old_dist, r['_distance'])
+                    
+            results = self._smart_rerank(list(unique_results.values()), query)[:20]
 
-        for asset in self._extract_images(results, query_lower): 
-            yield ("spatial_image", asset)
+            # 🔥 Strict Adherence: Drop garbage chunks to prevent hallucination
+            from core.config import SEARCH_THRESHOLD
+            filtered = []
+            for r in results:
+                if r.get('_distance', 0) <= SEARCH_THRESHOLD:
+                    filtered.append(r)
+                elif r.get('score', 0) > 10:  # Keyword-only matches must be strong
+                    filtered.append(r)
+            results = filtered
+
+            for asset in self._extract_images(results, query_lower): 
+                yield ("spatial_image", asset)
+
+            # 🔥 Absolute Grounding: If no solid context is found, stop here.
+            if not results:
+                yield ("text", "I'm sorry, but the provided documents do not contain information related to your query.\n")
+                return
 
         # ==========================================
         # 3. LLM SYNTHESIS (Llama 3.2)
         # ==========================================
         yield ("status", "⚡ Synthesizing response (Llama 3.2)...")
         
-        pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
-        context_to_send = f"RECORDS:\n{sql_context if sql_context else 'None'}\n\nMANUAL EXCERPTS:\n{pdf_text}"
+        # 🔥 Dynamic Prompting: Strict rules for SQL vs Vector text
+        if sql_context:
+            context_to_send = f"DATABASE RECORDS:\n{sql_context}"
+            task_instruction = """Task: Analyze and synthesize the provided Database Records into a clear, highly readable natural language summary. 
+            
+CRITICAL RULES:
+1. **Interpretation First**: Begin your response by writing 2-3 sentences explicitly detailing your understanding of the user's question (e.g., "You asked for the last 10 records. I interpreted this as retrieving the final 10 chronologically ingested sequence entries...").
+2. Do NOT output, repeat, or copy-paste the raw data as a table, grid, or pipe-separated list.
+3. Group similar items together (e.g., 'Four issues were reported with DC Electric Motors...').
+4. Summarize the key faults, resolutions, and trends in readable paragraphs or bullet points.
+5. Do NOT explain how SQL works, do NOT give safety warnings, and do NOT mention internet connectivity. Just synthesize the data provided."""
+        else:
+            pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
+            context_to_send = f"MANUAL EXCERPTS:\n{pdf_text}"
+            task_instruction = (
+                "Task: Answer the user's question using ONLY the provided CONTEXT.\n"
+                "If the exact answer cannot be found in the CONTEXT, you must reply with exactly this phrase and nothing else: "
+                "'I'm sorry, but the provided documents do not contain information about that.'"
+            )
 
         messages = [
             {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': f"QUESTION / TASK: '{query}'\n\n---\nSearch the following context and answer the question above using ONLY this data:\n\n{context_to_send}"}
+            {'role': 'user', 'content': f"QUESTION / TASK: '{query}'\n\n---\n{task_instruction}\n\nCONTEXT:\n{context_to_send}"}
         ]
         
         for chunk in self.llm.chat_stream(messages): 

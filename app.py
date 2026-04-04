@@ -59,26 +59,49 @@ def render_spatial_image(asset):
         return None
 
 # 3. DISPLAY MESSAGE HISTORY
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        if "spatial_assets" in message and message["spatial_assets"]:
-            for asset in message["spatial_assets"]:
-                img = render_spatial_image(asset)
-                if img:
-                    st.image(
-                        img, 
-                        caption=f"Reference: {asset['caption']}", 
-                        width=500
-                    )
-        
-        st.markdown(message["content"])
-        
-        if "sources" in message and message["sources"]:
-            with st.expander("🔎 View Source Chunks"):
-                for i, s in enumerate(message["sources"]):
-                    st.markdown(f"**Source {i+1} (Page {s['metadata'].get('page', '?')})**")
-                    st.info(s['text'])
-                    st.divider()
+if len(st.session_state.messages) == 0:
+    st.markdown(f"""
+        <div style="text-align: center; padding: 4rem 2rem; border-radius: 15px; background: rgba(120, 120, 120, 0.05); margin: 2rem 0; border: 1px solid rgba(120, 120, 120, 0.2);">
+            <div style="font-size: 3.5rem; display: inline-block; animation: float 3s ease-in-out infinite;">⚡</div>
+            <h1 style="font-size: 2.2rem; margin-top: 1rem; color: #4A90E2; font-weight: 600;">{app_title}</h1>
+            <p style="font-size: 1.1rem; color: #888; margin-top: 0.5rem;">
+                Your intelligent document assistant. Upload files and start asking questions!
+            </p>
+            <div style="margin-top: 2rem; display: flex; justify-content: center; gap: 2rem; color: #aaa;">
+                <div style="padding: 10px 20px; border-radius: 20px; background: rgba(120, 120, 120, 0.1);">📄 PDFs</div>
+                <div style="padding: 10px 20px; border-radius: 20px; background: rgba(120, 120, 120, 0.1);">📊 Spreadsheets</div>
+                <div style="padding: 10px 20px; border-radius: 20px; background: rgba(120, 120, 120, 0.1);">📝 Word Docs</div>
+            </div>
+        </div>
+        <style>
+            @keyframes float {{
+                0% {{ transform: translateY(0px); }}
+                50% {{ transform: translateY(-10px); }}
+                100% {{ transform: translateY(0px); }}
+            }}
+        </style>
+    """, unsafe_allow_html=True)
+else:
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            if "spatial_assets" in message and message["spatial_assets"]:
+                for asset in message["spatial_assets"]:
+                    img = render_spatial_image(asset)
+                    if img:
+                        st.image(
+                            img, 
+                            caption=f"Reference: {asset['caption']}", 
+                            width=500
+                        )
+            
+            st.markdown(message["content"])
+            
+            if "sources" in message and message["sources"]:
+                with st.expander("🔎 View Source Chunks"):
+                    for i, s in enumerate(message["sources"]):
+                        st.markdown(f"**Source {i+1} (Page {s['metadata'].get('page', '?')})**")
+                        st.info(s['text'])
+                        st.divider()
 
 # 4. USER INTERACTION LOOP
 if prompt := st.chat_input("Ask about your documents..."):
@@ -87,7 +110,7 @@ if prompt := st.chat_input("Ask about your documents..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        status_box = st.status("🚀 Processing...", expanded=False)
+        status_box = st.status("🚀 Processing...", expanded=True)
         answer_placeholder = st.empty()
         
         full_response = ""
@@ -98,7 +121,8 @@ if prompt := st.chat_input("Ask about your documents..."):
         for event_type, payload in rag.query_with_feedback(prompt):
             
             if event_type == "status":
-                status_box.update(label=f"⚡ {payload}", state="running")
+                status_box.write(f"🔄 {payload}")
+                status_box.update(label=f"🔄 {payload}", state="running")
             
             elif event_type == "spatial_image":
                 current_spatial_assets.append(payload)

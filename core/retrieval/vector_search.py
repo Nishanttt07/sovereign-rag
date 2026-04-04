@@ -120,7 +120,7 @@ class VectorDB:
             import re
             self.table = self.db.open_table("vectors")
             
-            # 🔥 THE FIX: Ignore conversational filler words
+            # 🔥 Ignore conversational filler words (Anti-Poisoning)
             ignore_words = {"what", "is", "are", "the", "how", "why", "who", "when", "where", "can", "you", "me", "and", "for", "with", "about", "explain", "summarize", "describe", "details", "of", "in", "to", "a", "an"}
             clean_query = re.sub(r'[^\w\s\.]', '', query.lower())
             

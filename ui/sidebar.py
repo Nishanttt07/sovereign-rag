@@ -46,64 +46,65 @@ def render_sidebar():
             for uploaded_file in uploaded_files:
                 if uploaded_file.name not in st.session_state.processed_files:
                     save_path = RAW_PDFS_DIR / uploaded_file.name
-                    with open(save_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
                     
-                    ext = uploaded_file.name.split('.')[-1].lower()
-                    status_pill = st.empty()
-                    
-                    try:
-                        # PATH A: PDF
-                        if ext == 'pdf':
-                            status_pill.info(f"Extracting Text for {uploaded_file.name}...", icon="🧠")
-                            ingest_file(save_path, lambda msg: status_pill.info(msg, icon="🧠"))
-                            
-                            from core.worker import background_vision_worker
-                            st.session_state.vision_processing = True
-                            vision_thread = threading.Thread(target=background_vision_worker, args=(save_path,))
-                            add_script_run_ctx(vision_thread) 
-                            vision_thread.start()
-                            status_pill.success(f"{uploaded_file.name} Ready! Diagrams indexing in background...", icon="✨")
+                    with st.status(f"🔄 Processing **{uploaded_file.name}**...", expanded=True) as status_box:
+                        status_box.write("💾 Saving file to disk...")
+                        with open(save_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
                         
-                        # PATH B: Tabular (CSV / XLSX for SQL database)
-                        elif ext in ['csv', 'xlsx']:
-                            status_pill.info(f"Converting {uploaded_file.name} to SQL Database...", icon="📊")
-                            processor = TabularProcessor()
-                            result = processor.process_file(save_path, status_callback=lambda msg: status_pill.info(msg, icon="📊"))
-                            
-                            if result.get("status") == "success":
-                                status_pill.success(f"✅ {uploaded_file.name} added to SQL Database!")
-                            else:
-                                status_pill.error(f"❌ Failed: {result.get('message')}")
+                        ext = uploaded_file.name.split('.')[-1].lower()
+                        
+                        try:
+                            # PATH A: PDF
+                            if ext == 'pdf':
+                                status_box.write("🧠 Extracting text structure...")
+                                ingest_file(save_path, lambda msg: status_box.write(f"⏳ {msg}"))
                                 
-                        # 🔥 PATH C: Word Document (DOCX for Vector database)
-                        elif ext == 'docx':
-                            status_pill.info(f"Extracting Markdown from {uploaded_file.name}...", icon="📝")
+                                from core.worker import background_vision_worker
+                                st.session_state.vision_processing = True
+                                vision_thread = threading.Thread(target=background_vision_worker, args=(save_path,))
+                                add_script_run_ctx(vision_thread) 
+                                vision_thread.start()
+                                status_box.update(label=f"✅ {uploaded_file.name} Ready!", state="complete", expanded=False)
+                                st.toast(f"{uploaded_file.name} text indexed! Diagrams processing in background.", icon="✨")
                             
-                            # 1. Process the DOCX
-                            processor = OfficeProcessor()
-                            chunks = processor.process_file(
-                                str(save_path), 
-                                status_callback=lambda msg: status_pill.info(msg, icon="📝")
-                            )
-                            
-                            # 2. Save to Vector Database
-                            if chunks:
-                                db = VectorDB()
-                                db.add_chunks(chunks)
-                                status_pill.success(f"✅ {uploaded_file.name} added to Vector Database!")
-                            else:
-                                status_pill.error(f"❌ Failed to process {uploaded_file.name}")
+                            # PATH B: Tabular (CSV / XLSX for SQL database)
+                            elif ext in ['csv', 'xlsx']:
+                                status_box.write("📊 Converting Tabular data to SQL...")
+                                processor = TabularProcessor()
+                                result = processor.process_file(save_path, status_callback=lambda msg: status_box.write(f"⏳ {msg}"))
+                                
+                                if result.get("status") == "success":
+                                    status_box.update(label=f"✅ {uploaded_file.name} added to SQL Database!", state="complete", expanded=False)
+                                    st.toast(f"Tabular data '{uploaded_file.name}' ready for querying!", icon="📊")
+                                else:
+                                    status_box.update(label=f"❌ Failed: {result.get('message')}", state="error")
+                                    
+                            # 🔥 PATH C: Word Document (DOCX for Vector database)
+                            elif ext == 'docx':
+                                status_box.write("📝 Extracting Markdown from Document...")
+                                
+                                processor = OfficeProcessor()
+                                chunks = processor.process_file(
+                                    str(save_path), 
+                                    status_callback=lambda msg: status_box.write(f"⏳ {msg}")
+                                )
+                                
+                                if chunks:
+                                    status_box.write("💾 Adding chunks to Vector DB...")
+                                    db = VectorDB()
+                                    db.add_chunks(chunks)
+                                    status_box.update(label=f"✅ {uploaded_file.name} added to Vector Database!", state="complete", expanded=False)
+                                    st.toast(f"Markdown doc '{uploaded_file.name}' indexed successfully!", icon="🚀")
+                                else:
+                                    status_box.update(label=f"❌ Failed to process {uploaded_file.name}", state="error")
 
-                        # Update memory and save to hard drive
-                        st.session_state.processed_files.add(uploaded_file.name)
-                        save_ingestion_log(st.session_state.processed_files)
-                        
-                        time.sleep(1.5) 
-                        status_pill.empty()
-                        
-                    except Exception as e:
-                        status_pill.error(f"Error processing {uploaded_file.name}: {e}", icon="❌")
+                            # Update memory and save to hard drive
+                            st.session_state.processed_files.add(uploaded_file.name)
+                            save_ingestion_log(st.session_state.processed_files)
+                            
+                        except Exception as e:
+                            status_box.update(label=f"❌ Error processing {uploaded_file.name}: {e}", state="error")
 
         st.divider()
 
@@ -118,29 +119,32 @@ def render_sidebar():
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
-            if st.button("🔄 Full Reset"):
-                status_pill = st.empty()
-                status_pill.warning("Deleting Databases...", icon="⚠️")
-                
-                if os.path.exists(DB_DIR):
-                    try:
-                        shutil.rmtree(DB_DIR)
-                    except PermissionError:
-                        status_pill.error("❌ Close other apps using this DB!")
-                        return
-                
-                if os.path.exists(SQL_DB_PATH):
-                    try:
-                        os.remove(SQL_DB_PATH)
-                    except Exception as e:
-                        pass
-                
-                # Delete the permanent log book
-                if os.path.exists(INGESTION_LOG_PATH):
-                    os.remove(INGESTION_LOG_PATH)
+            if st.button("🔄 Full Reset", use_container_width=True):
+                with st.spinner("Deleting databases and clearing memory..."):
+                    if os.path.exists(DB_DIR):
+                        try:
+                            shutil.rmtree(DB_DIR)
+                        except PermissionError:
+                            st.error("❌ Close other apps using this DB before resetting.")
+                            return
+                    
+                    if os.path.exists(SQL_DB_PATH):
+                        try:
+                            os.remove(SQL_DB_PATH)
+                        except Exception as e:
+                            pass
+                    
+                    # Delete the permanent log book
+                    if os.path.exists(INGESTION_LOG_PATH):
+                        try:
+                            os.remove(INGESTION_LOG_PATH)
+                        except Exception:
+                            pass
 
-                status_pill.info("System Wiped.", icon="🗑️")
-                st.session_state.processed_files.clear()
+                    st.session_state.processed_files.clear()
+                    time.sleep(1.5)
+                    
+                st.success("System completely wiped. Restarting...", icon="🗑️")
                 time.sleep(1)
                 st.rerun()
 
