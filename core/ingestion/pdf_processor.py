@@ -14,6 +14,29 @@ class PDFProcessor:
     def __init__(self):
         self.chunk_size = 600  
         self.overlap = 150     
+        self._ocr_engine = None
+
+    def get_ocr_engine(self):
+        if self._ocr_engine is None:
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                self._ocr_engine = RapidOCR()
+            except ImportError:
+                self._ocr_engine = False
+        return self._ocr_engine if self._ocr_engine is not False else None
+
+    def _is_garbled(self, text):
+        if not text or len(text) < 50: return False
+        
+        words = text.split()
+        if len(words) > 0 and (len(text) / len(words)) > 25:
+            return True
+            
+        weird_chars = sum(1 for c in text if 0x0100 <= ord(c) <= 0x1FFF or ord(c) == 0xFFFD)
+        if weird_chars / len(text) > 0.05:
+            return True
+            
+        return False
 
     def process_text_fast(self, file_path, status_callback=None):
         doc = fitz.open(file_path)
@@ -21,7 +44,21 @@ class PDFProcessor:
         BATCH_SIZE = 15
 
         for page_num, page in enumerate(doc):
-            text = page.get_text("text").replace('\n', ' ').strip()
+            raw_text = page.get_text("text")
+            
+            if self._is_garbled(raw_text):
+                engine = self.get_ocr_engine()
+                if engine:
+                    if status_callback:
+                        status_callback(f"Fixing garbled fonts on page {page_num+1} using OCR...")
+                    pix = page.get_pixmap(dpi=150)
+                    result, _ = engine(pix.tobytes("png"))
+                    if result:
+                        raw_text = " ".join([line[1] for line in result])
+                    else:
+                        raw_text = ""
+                        
+            text = raw_text.replace('\n', ' ').strip()
             if not text: continue
             
             for i in range(0, len(text), self.chunk_size - self.overlap):
@@ -91,15 +128,9 @@ class PDFProcessor:
                 if rects and rects[0].width > 40 and rects[0].height > 40:
                     raw_img_rects.append(rects[0])
                     
-            # 2. Catch Vector Graphics (Physics diagrams, lines, shapes)
-            try:
-                for drawing in page.get_drawings():
-                    r = drawing["rect"]
-                    # Ignore tiny dots and giant page borders
-                    if r.width > 20 and r.height > 20 and r.get_area() < (page_area * 0.8):
-                        raw_img_rects.append(r)
-            except Exception as e:
-                print(f"⚠️ Vector Drawing Error on page {page_num+1}: {e}")
+            # 2. Vector Graphics extraction removed.
+            # Math formulas and text boxes drawn as vectors were being falsely 
+            # clustered into "images", causing text loss and bad UI crops.
 
             # Cluster all lines and photos together into solid diagram blocks
             clustered_rects = self._cluster_rectangles(raw_img_rects, distance_threshold=45)
@@ -111,8 +142,8 @@ class PDFProcessor:
                 text = block[4].strip().replace('\n', ' ')
                 
                 # USING DYNAMIC REGEX PATTERN HERE
-                # Also preserves the textbook numbering format (e.g. "1.1")
-                regex_pattern = rf'^(?:{labels_pattern})[\s\-\.:]*\d*|^\d+\.\d+'
+                # Match typical labels like "Fig. 1", "Figure 5.13", "Table 1.19"
+                regex_pattern = rf'^(?:{labels_pattern})[\s\.:\-_]*\d+[\.\da-zA-Z\(\)]*'
                 match = re.search(regex_pattern, text, re.IGNORECASE)
                 
                 if match:

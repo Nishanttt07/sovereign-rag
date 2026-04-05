@@ -48,22 +48,38 @@ class RAGPipeline:
 
     def _extract_images(self, results, query_lower):
         clean_query = re.sub(r'[^\w\s\.]', '', query_lower)
-        query_terms = list(set([w for w in clean_query.split() if len(w) > 2 and w not in STOP_WORDS]))
+        query_terms = list(set([w for w in clean_query.split() if len(w) > 3 and w not in STOP_WORDS]))
         image_candidates = []
         
         for res in results:
             meta = res.get('metadata', {})
             if meta.get('type') == 'image_index':
                 cap = meta.get('image_caption', 'None').lower()
+                full_text = res.get('text', '').lower()
                 clean_cap = re.sub(r'[^\w\s\.]', '', cap)
-                match_count = sum(1 for k in query_terms if k in clean_cap)
+                clean_full = re.sub(r'[^\w\s\.]', '', full_text)
                 
-                if (clean_query in clean_cap) or (match_count >= 2):
+                cap_matches = sum(1 for k in query_terms if k in clean_cap)
+                full_matches = sum(1 for k in query_terms if k in clean_full)
+                match_count = max(cap_matches, full_matches)
+                dist = res.get('_distance', 1.0)
+                
+                is_relevant = False
+                min_needed = max(2, len(query_terms) // 2)
+                
+                if dist <= 0.55:
+                    is_relevant = True
+                if clean_query in clean_cap and len(clean_query) > 4:
+                    is_relevant = True
+                if len(query_terms) > 0 and match_count >= min_needed:
+                    is_relevant = True
+                
+                if is_relevant:
                     image_candidates.append({
                         "source": meta.get('source'), "page": meta.get('page'),
                         "rect": meta.get('image_rect'), "xref": meta.get('image_xref', 0),
                         "caption": meta.get('image_caption'), "image_path": meta.get('image_path', 'None'),
-                        "score": match_count 
+                        "score": match_count + (1.0 - dist) * 10
                     })
 
         image_candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -83,8 +99,6 @@ class RAGPipeline:
         tabular_extensions = [".csv", ".xlsx"]
         is_sql_query = (
             any(trigger in query_lower for trigger in SQL_TRIGGERS) or 
-            "table" in query_lower or 
-            "row" in query_lower or
             any(ext in query_lower for ext in tabular_extensions)
         )
 
@@ -163,9 +177,13 @@ CRITICAL RULES:
             pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
             context_to_send = f"MANUAL EXCERPTS:\n{pdf_text}"
             task_instruction = (
-                "Task: Fulfill the user's request (e.g., answering a question or summarizing a document) using ONLY the provided CONTEXT.\n"
-                "If the CONTEXT is entirely irrelevant or does not contain information to fulfill the request, you must reply with exactly this phrase and nothing else: "
-                "'I'm sorry, but the provided documents do not contain information about that.'"
+                "STRICT RULES:\n"
+                "1. You MUST directly answer the user's question by extracting relevant data from the CONTEXT below.\n"
+                "2. NEVER say 'no specific problem', 'no question provided', or 'I apologize'. The user IS asking a question — answer it.\n"
+                "3. If the user asks for formulas, dimensions, specifications, or data — list them out clearly.\n"
+                "4. If the CONTEXT is entirely unrelated to the question, reply ONLY: "
+                "'I'm sorry, but the provided documents do not contain information about that.'\n"
+                "5. Cite page numbers when available."
             )
 
         messages = [

@@ -1,39 +1,16 @@
-import streamlit as st
 import os
-import shutil
-import lancedb
-import time
-import threading
-import json 
-from streamlit.runtime.scriptrunner import add_script_run_ctx
+filepath = r'c:\sovereign_rag_project\ui\sidebar.py'
+with open(filepath, 'r', encoding='utf-8') as f:
+    content = f.read()
 
-from core.config import RAW_PDFS_DIR, DB_DIR, SQL_DB_PATH, DATA_DIR
-from core.ingestion.pdf_processor import PDFProcessor
-from core.ingestion.tabular_processor import TabularProcessor
-from core.ingestion.office_processor import OfficeProcessor  # <-- NEW IMPORT
-from core.ingestion.pptx_processor import PPTXProcessor
-from core.ingestion.txt_processor import TXTProcessor
-from core.retrieval.vector_search import VectorDB
+# split around 'def render_sidebar():'
+parts = content.split('def render_sidebar():', 1)
 
-# --- PERMANENT MEMORY LOGIC ---
-INGESTION_LOG_PATH = DATA_DIR / "ingestion_log.json"
-
-def load_ingestion_log():
-    if os.path.exists(INGESTION_LOG_PATH):
-        with open(INGESTION_LOG_PATH, "r") as f:
-            return set(json.load(f))
-    return set()
-
-def save_ingestion_log(files_set):
-    with open(INGESTION_LOG_PATH, "w") as f:
-        json.dump(list(files_set), f)
-
-def process_document(file_name, source_path=None, file_bytes=None):
+new_func = '''def process_document(file_name, source_path=None, file_bytes=None):
     if file_name in st.session_state.processed_files:
         return
         
     save_path = RAW_PDFS_DIR / file_name
-    save_path.parent.mkdir(parents=True, exist_ok=True)
     
     with st.status(f"🔄 Processing **{file_name}**...", expanded=True) as status_box:
         try:
@@ -138,100 +115,46 @@ def process_document(file_name, source_path=None, file_bytes=None):
         except Exception as e:
             status_box.update(label=f"❌ Error processing {file_name}: {e}", state="error")
 
-def render_sidebar():
-    # Load the permanent log from the hard drive instead of just session state
-    if "processed_files" not in st.session_state:
-        st.session_state.processed_files = load_ingestion_log()
+def render_sidebar():'''
 
-    with st.sidebar:
-        st.header("📂 Document Manager")
-        
-        folder_mode = st.toggle("📂 Enable folder selection")
-        
-        # Accepts all necessary file types
-        uploaded_files = st.file_uploader(
-            "Upload Documents or Spreadsheets", 
-            type=["pdf", "csv", "xlsx", "docx", "pptx", "txt"], 
-            key="main_uploader", 
-            accept_multiple_files=True
-        )
-        
-        if folder_mode:
-            import streamlit.components.v1 as components
-            components.html(
-                """
-                <script>
-                const inputs = parent.document.querySelectorAll('input[type="file"]');
-                if (inputs.length > 0) {
-                    inputs[0].setAttribute("webkitdirectory", "true");
-                    inputs[0].setAttribute("directory", "true");
-                }
-                </script>
-                """,
-                height=0
-            )
-        
-        if uploaded_files:
+new_content = parts[0] + new_func + parts[1]
+
+start_marker = '        if uploaded_files:\n            for uploaded_file in uploaded_files:'
+end_marker = '        st.divider()'
+
+idx_start = new_content.find(start_marker)
+idx_end = new_content.find(end_marker, idx_start)
+
+replacement_block = '''        if uploaded_files:
             for uploaded_file in uploaded_files:
                 process_document(uploaded_file.name, file_bytes=uploaded_file.getbuffer())
 
         st.divider()
 
-        with st.expander("🛠️ System Health & Debug", expanded=True):
-            try:
-                db = lancedb.connect(str(DB_DIR))
-                if "vectors" in db.table_names():
-                    tbl = db.open_table("vectors")
-                    st.success(f"✅ DB Connected: {len(tbl)} chunks")
+        st.subheader("📁 Process Local Folder")
+        folder_path = st.text_input("Enter absolute folder path (e.g., C:\\\\Documents):")
+        if st.button("Process Folder"):
+            if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path):
+                valid_extensions = ('.pdf', '.csv', '.xlsx', '.docx', '.pptx', '.txt')
+                processed_any = False
+                for root_dir, _, files in os.walk(folder_path):
+                    for file in files:
+                        if file.lower().endswith(valid_extensions):
+                            source_path = os.path.join(root_dir, file)
+                            process_document(file, source_path=source_path)
+                            processed_any = True
+                if not processed_any:
+                    st.warning("No supported files found in the specified folder.")
                 else:
-                    st.warning("⚠️ DB Empty")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+                    st.success(f"Finished processing folder: {folder_path}")
+            else:
+                st.error("Invalid folder path or folder does not exist.")
 
-            if st.button("🔄 Full Reset", use_container_width=True):
-                with st.spinner("Deleting databases and clearing memory..."):
-                    if os.path.exists(DB_DIR):
-                        try:
-                            shutil.rmtree(DB_DIR)
-                        except PermissionError:
-                            st.error("❌ Close other apps using this DB before resetting.")
-                            return
-                    
-                    if os.path.exists(SQL_DB_PATH):
-                        try:
-                            os.remove(SQL_DB_PATH)
-                        except Exception as e:
-                            pass
-                    
-                    # Delete the permanent log book
-                    if os.path.exists(INGESTION_LOG_PATH):
-                        try:
-                            os.remove(INGESTION_LOG_PATH)
-                        except Exception:
-                            pass
+'''
 
-                    st.session_state.processed_files.clear()
-                    time.sleep(1.5)
-                    
-                st.success("System completely wiped. Restarting...", icon="🗑️")
-                time.sleep(1)
-                st.rerun()
+final_content = new_content[:idx_start] + replacement_block + new_content[idx_end + len('        st.divider()'):]
 
-        st.subheader("📚 Active Files")
-        if os.path.exists(RAW_PDFS_DIR):
-            for root, _, files in os.walk(RAW_PDFS_DIR):
-                for f in files:
-                    if f.lower().endswith(('.pdf', '.csv', '.xlsx', '.docx', '.pptx', '.txt')):
-                        rel_path = os.path.relpath(os.path.join(root, f), RAW_PDFS_DIR)
-                        rel_path_fwd = rel_path.replace('\\', '/')
-                        
-                        if rel_path_fwd in st.session_state.processed_files or f in st.session_state.processed_files:
-                            st.markdown(f"✅ `{rel_path_fwd}`")
-                        else:
-                            st.caption(f"📄 `{rel_path_fwd}` (Pending)")
+with open(filepath, 'w', encoding='utf-8') as f:
+    f.write(final_content)
 
-def ingest_file(file_path, status_callback=None):
-    processor = PDFProcessor()
-    db = VectorDB()
-    for batch in processor.process_text_fast(file_path, status_callback):
-        db.add_chunks(batch)
+print('Done!')

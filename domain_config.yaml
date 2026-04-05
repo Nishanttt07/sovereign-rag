@@ -10,6 +10,7 @@ vision_extraction:
   target_labels: 
     - "Fig"
     - "Figure"
+    - "Table"
     - "Diagram"
     - "Schematic"
     - "Blueprint"
