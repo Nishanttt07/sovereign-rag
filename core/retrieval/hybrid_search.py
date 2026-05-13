@@ -121,8 +121,13 @@ class RAGPipeline:
         results = []
         # 🔥 ONLY run Vector Search if the SQL Agent didn't find anything
         if not sql_context:
-            yield ("status", "🔍 Searching documents...")
-            all_results = self.db.search(query, top_k=20) + self.db.search_keyword(query, top_k=8)
+            yield ("status", "🔍 Searching documents (semantic)...")
+            semantic_results = self.db.search(query, top_k=10)
+            
+            yield ("status", "🔍 Searching documents (keyword)...")
+            keyword_results = self.db.search_keyword(query, top_k=5)
+            
+            all_results = semantic_results + keyword_results
             
             # Intelligent Merge: Never overwrite Keyword scores with blank Semantic matches
             unique_results = {}
@@ -137,7 +142,7 @@ class RAGPipeline:
                         old_dist = unique_results[txt].get('_distance', 1.0)
                         unique_results[txt]['_distance'] = min(old_dist, r['_distance'])
                     
-            results = self._smart_rerank(list(unique_results.values()), query)[:20]
+            results = self._smart_rerank(list(unique_results.values()), query)[:10]
 
             # 🔥 Strict Adherence: Drop garbage chunks to prevent hallucination
             from core.config import SEARCH_THRESHOLD
@@ -174,7 +179,9 @@ CRITICAL RULES:
 4. Summarize the key faults, resolutions, and trends in readable paragraphs or bullet points.
 5. Do NOT explain how SQL works, do NOT give safety warnings, and do NOT mention internet connectivity. Just synthesize the data provided."""
         else:
-            pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text']}" for r in results])
+            # Send only the top 5 most relevant chunks, capped at 4000 chars each
+            top_results = results[:5]
+            pdf_text = "\n".join([f"Page {r['metadata']['page']}: {r['text'][:4000]}" for r in top_results])
             context_to_send = f"MANUAL EXCERPTS:\n{pdf_text}"
             task_instruction = (
                 "STRICT RULES:\n"

@@ -1,0 +1,43 @@
+
+
+## Tech Stack & Core Libraries
+
+### 1. Application & Frontend
+* **Streamlit**: Used as the core framework for the user interface. It powers the conversational chat window (`app.py`), the document upload manager (`ui/sidebar.py`), and real-time processing indicators.
+* **Pillow (PIL)**: Used to load, process, and display spatial images inside the Streamlit chat interface (e.g., rendering PyMuPDF pixel maps as PNGs).
+
+### 2. Document Processing & Ingestion
+* **PyMuPDF (`fitz`)**: The primary workhorse for parsing PDFs. It is used to extract textual blocks, find vector graphics (`get_drawings`), and dynamically render specific rectangular crops of images on the fly during chat (`render_spatial_image`).
+* **pymupdf4llm**: A specialized wrapper that converts raw PDF pages directly into Markdown formats, preserving structural hierarchies before splitting.
+* **MarkItDown**: A utility used in `office_processor.py` and `pptx_processor.py` to natively convert Office documents (`.docx`, `.pptx`) into rich Markdown format for vectorization.
+* **LangChain (`MarkdownTextSplitter`)**: Used during ingestion to chunk the markdown text into overlapping segments without breaking sentences or logical formatting.
+* **RapidOCR (`rapidocr_onnxruntime`)**: Used dynamically within `PDFProcessor` as a fallback mechanism to re-process and fix garbled or corrupted PDF fonts by performing Optical Character Recognition on the page pixels.
+* **Pandas & Openpyxl**: Used in `tabular_processor.py` to efficiently parse and clean `.csv` and `.xlsx` files into DataFrames before mapping them to SQLite tables.
+
+### 3. Databases
+* **LanceDB**: A fast, embedded vector database. It stores the 768-dimensional embeddings, textual content, and spatial metadata (bounding boxes for images). It natively powers the semantic `search` function.
+* **SQLite**: A local relational database used exclusively by the `SQLAgent` to store parsed tabular data (CSVs and Excel spreadsheets) allowing for structured `SELECT` queries.
+
+### 4. Configuration & API
+* **PyYAML**: Used in `core/config.py` to parse dynamic, domain-specific behavior configurations from `domain_config.yaml` (like custom stop words, vision labels, and prompt instructions).
+* **Requests**: Used to communicate with the local Ollama API to stream completions and fetch dense vectors.
+
+---
+
+## AI Models (Powered by Ollama)
+
+### 1. Llama 3.2 (`llama3:8b` / `llama3.2`)
+* **Role**: Primary Synthesis Engine
+* **Usage**: Found in `hybrid_search.py` (`LLMEngine`). Once the relevant chunks or SQL records are retrieved from the databases, they are injected into a prompt context. Llama 3.2 is responsible for reading that context and answering the user's question accurately in natural language.
+
+### 2. Qwen 2.5 Coder (`qwen2.5-coder:3b`)
+* **Role**: Autonomous SQL Agent
+* **Usage**: Found in `sql_agent.py`. This specialized coding model receives the user's natural language question alongside the live SQLite database schema. It autonomously generates secure, read-only `SELECT` queries to fetch tabular data, completely bypassing vector search for spreadsheet questions.
+
+### 3. mxbai-embed-large
+* **Role**: Vector Embedding Model
+* **Usage**: Used by the `Embedder` class in `vector_search.py`. It converts all document chunks and incoming user queries into 768-dimensional dense vectors. These vectors are what allow LanceDB to perform semantic similarity matching.
+
+### 4. Moondream
+* **Role**: Vision Language Model (Configured)
+* **Usage**: Specified in `core/config.py` for advanced visual extraction and reasoning over complex charts and diagrams when textual metadata isn't enough.

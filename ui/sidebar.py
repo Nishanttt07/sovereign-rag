@@ -143,37 +143,50 @@ def render_sidebar():
     if "processed_files" not in st.session_state:
         st.session_state.processed_files = load_ingestion_log()
 
+    SUPPORTED_EXTENSIONS = ('.pdf', '.csv', '.xlsx', '.docx', '.pptx', '.txt')
+
     with st.sidebar:
         st.header("📂 Document Manager")
         
         folder_mode = st.toggle("📂 Enable folder selection")
         
-        # Accepts all necessary file types
-        uploaded_files = st.file_uploader(
-            "Upload Documents or Spreadsheets", 
-            type=["pdf", "csv", "xlsx", "docx", "pptx", "txt"], 
-            key="main_uploader", 
-            accept_multiple_files=True
-        )
-        
         if folder_mode:
-            import streamlit.components.v1 as components
-            components.html(
-                """
-                <script>
-                const inputs = parent.document.querySelectorAll('input[type="file"]');
-                if (inputs.length > 0) {
-                    inputs[0].setAttribute("webkitdirectory", "true");
-                    inputs[0].setAttribute("directory", "true");
-                }
-                </script>
-                """,
-                height=0
+            # --- Folder path mode: user provides a local folder path ---
+            folder_path = st.text_input(
+                "📁 Enter folder path",
+                placeholder=r"C:\Users\you\Documents\my_docs",
             )
-        
-        if uploaded_files:
-            for uploaded_file in uploaded_files:
-                process_document(uploaded_file.name, file_bytes=uploaded_file.getbuffer())
+            if folder_path and os.path.isdir(folder_path):
+                found_files = []
+                for root, _, files in os.walk(folder_path):
+                    for f in files:
+                        if f.lower().endswith(SUPPORTED_EXTENSIONS):
+                            found_files.append(os.path.join(root, f))
+                
+                if found_files:
+                    st.caption(f"Found **{len(found_files)}** supported file(s)")
+                    if st.button("📥 Ingest all files", use_container_width=True):
+                        for fpath in found_files:
+                            process_document(
+                                os.path.basename(fpath),
+                                source_path=fpath
+                            )
+                else:
+                    st.warning("No supported files found in this folder.")
+            elif folder_path:
+                st.error("❌ Folder not found. Please check the path.")
+        else:
+            # --- Normal file uploader mode ---
+            uploaded_files = st.file_uploader(
+                "Upload Documents or Spreadsheets", 
+                type=["pdf", "csv", "xlsx", "docx", "pptx", "txt"], 
+                key="main_uploader", 
+                accept_multiple_files=True
+            )
+            
+            if uploaded_files:
+                for uploaded_file in uploaded_files:
+                    process_document(uploaded_file.name, file_bytes=uploaded_file.getbuffer())
 
         st.divider()
 

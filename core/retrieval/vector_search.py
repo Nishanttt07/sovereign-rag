@@ -107,7 +107,7 @@ class VectorDB:
             query_vector = self.embedder.embed(query)
             if query_vector is None: return []
             
-            results = self.table.search(query_vector).metric("cosine").limit(top_k + 20).to_list()
+            results = self.table.search(query_vector).metric("cosine").limit(top_k + 5).to_list()
             clean_results = [r for r in results if r['text'] != 'init'][:top_k]
             print(f"--- DEBUG: Semantic Search found {len(clean_results)} results ---")
             return clean_results
@@ -130,7 +130,7 @@ class VectorDB:
             print(f"--- DEBUG: Keyword Search for {keywords} ---")
             
             try:
-                all_rows = self.table.search().limit(10000).to_list()
+                all_rows = self.table.search().limit(2000).to_list()
             except Exception:
                 return []
 

@@ -128,29 +128,34 @@ class PDFProcessor:
                 if rects and rects[0].width > 40 and rects[0].height > 40:
                     raw_img_rects.append(rects[0])
                     
-            # 2. Vector Graphics extraction removed.
-            # Math formulas and text boxes drawn as vectors were being falsely 
-            # clustered into "images", causing text loss and bad UI crops.
+            # 2. Catch Vector Graphics
+            paths = page.get_drawings()
+            for p in paths:
+                rect = p["rect"]
+                # Filter out tiny dots/lines and huge background boxes
+                if rect.width > 15 and rect.height > 15 and rect.width < page.rect.width * 0.9 and rect.height < page.rect.height * 0.9:
+                    raw_img_rects.append(rect)
 
             # Cluster all lines and photos together into solid diagram blocks
             clustered_rects = self._cluster_rectangles(raw_img_rects, distance_threshold=45)
             if not clustered_rects: continue
 
             page_captions = []
-            for block in text_blocks:
-                if block[6] == 1: continue 
-                text = block[4].strip().replace('\n', ' ')
-                
-                # USING DYNAMIC REGEX PATTERN HERE
-                # Match typical labels like "Fig. 1", "Figure 5.13", "Table 1.19"
-                regex_pattern = rf'^(?:{labels_pattern})[\s\.:\-_]*\d+[\.\da-zA-Z\(\)]*'
-                match = re.search(regex_pattern, text, re.IGNORECASE)
-                
-                if match:
-                    cap_id = match.group(0).strip()
-                    page_captions.append({
-                        "id": cap_id, "text": text, "rect": fitz.Rect(block[:4])
-                    })
+            
+            # Use dict text extraction for more precise line bounding boxes
+            d = page.get_text("dict")
+            regex_pattern = rf'\b(?:{labels_pattern})\b[\s\.:\-_]*\d+[\.\da-zA-Z\(\)]*'
+            
+            for block in d.get("blocks", []):
+                if block.get("type") == 0:  # text block
+                    for line in block.get("lines", []):
+                        text = " ".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                        match = re.search(regex_pattern, text, re.IGNORECASE)
+                        if match:
+                            cap_id = match.group(0).strip()
+                            page_captions.append({
+                                "id": cap_id, "text": text, "rect": fitz.Rect(line["bbox"])
+                            })
 
             for cap in page_captions:
                 best_cluster = None

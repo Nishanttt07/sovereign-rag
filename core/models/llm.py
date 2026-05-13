@@ -10,12 +10,17 @@ class LLMEngine:
     def chat_stream(self, messages):
         """
         Streams response from Ollama using the dynamically assigned model.
+        Uses optimized options for faster first-token latency.
         """
         try:
             stream = ollama.chat(
                 model=self.model,
                 messages=messages,
-                stream=True
+                stream=True,
+                options={
+                    "num_ctx": 4096,      # Smaller context window = faster processing
+                    "num_predict": 1024,   # Cap output length for speed
+                }
             )
             
             for chunk in stream:

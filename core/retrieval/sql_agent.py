@@ -46,7 +46,7 @@ class SQLAgent:
         {schema}
         
         CRITICAL RULES:
-        1. Dates in the database are stored in YYYY-MM-DD format. If the user provides a date in a different format, you MUST convert it to YYYY-MM-DD.
+        1. Dates in the database are stored in strict YYYY-MM-DD format (zero-padded). If the user provides a date missing zeros (like 2023-4-4) or in a different format, you MUST zero-pad the month and day to YYYY-MM-DD (e.g. 2023-04-04) before writing the SQL. Do not use unpadded dates in the query.
         2. Use the exact column names provided in the schema. Use LIKE '%keyword%' for text searches to be safe.
         3. If the user asks for the "last", "latest", "recent", or "bottom" records, you MUST use an ORDER BY clause (e.g., ORDER BY rowid DESC, or ORDER BY the ID column DESC) with a LIMIT clause.
         
